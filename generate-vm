@@ -254,6 +254,8 @@ EOF
 
 chmod +x "$CONFIG_SCRIPT"
 
+"$CONFIG_SCRIPT"
+
 # ---------------------------------------------------------------------------
 # Generate VM creation script
 # ---------------------------------------------------------------------------
@@ -299,18 +301,19 @@ cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
 echo "Creating Disk.."
 qemu-img resize "\${VM_DISK}" "${SIZE}"
 
-virt-install \\
-  --name "\${VMNAME}" \\
-  --import \\
-  --ram 2048 \\
-  --disk "\${VM_DISK},device=disk,bus=virtio" \\
-  --disk "\${VM_CONFIG_ISO},device=cdrom,bus=scsi" \\
-  --vcpus 2 \\
-  --os-variant "${OS_VARIANT}" \\
-  --network "bridge=\${EXTERNALBRIDGE}" \\
-  --console pty,target_type=serial \\
-  --graphics vnc,listen=0.0.0.0,port=-1 \\
-  --noautoconsole
+virt-install \
+  --name "${VMNAME}" \
+  --import \
+  --ram 2048 \
+  --disk "${VM_DISK},device=disk,bus=virtio" \
+  --disk "${VM_CONFIG_ISO},device=cdrom,bus=scsi" \
+  --vcpus 2 \
+  --os-variant "${OS_VARIANT}" \
+  --network "bridge=${EXTERNALBRIDGE}" \
+  --console pty,target_type=serial \
+  --graphics vnc,listen=0.0.0.0,port=-1 \
+  --noautoconsole \
+  --print-xml | virsh define /dev/stdin
 EOF
 
 chmod +x "$VM_SCRIPT"
