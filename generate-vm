@@ -5,6 +5,7 @@ set -e
 NAME=""
 SIZE=""
 OS=""
+DEFAULT_USER=""
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -13,18 +14,13 @@ OS=""
 VMPATH="/opt/vm"
 EXTERNALBRIDGE="ext"
 
-# Change these to wherever your base images actually live.
 ALMA_RAWIMAGE="./images/alma.qcow2"
 ARCH_RAWIMAGE="./images/arch.qcow2"
 
-# Cloud-init settings
 ROOT_PASSWORD="0p3nflight"
-DEFAULT_USER="flightadmin"
 
-# Configuration file
 CONFIG_FILE="./vm.conf"
 
-# Public key - can be overridden by the config file
 SSH_PUBLIC_KEY=""
 
 # ---------------------------------------------------------------------------
@@ -33,17 +29,18 @@ SSH_PUBLIC_KEY=""
 
 usage() {
   echo "Usage:"
-  echo "  $0 -n NAME -s SIZE --os OS"
+  echo "  $0 -n NAME -u USER -s SIZE --os OS"
   echo
   echo "Options:"
   echo "  -n, --name NAME                  VM name"
+  echo "  -u, --user USER                  Default username"
   echo "  -s, --size SIZE                  Disk size, e.g. 128G"
   echo "      --os OS                      Operating system: alma or arch"
   echo "      --operating-system OS        Same as --os"
   echo "  -h, --help                       Show this help"
   echo
   echo "Example:"
-  echo "  $0 --name stevetest1 --size 128G --os alma"
+  echo "  $0 --name stevetest1 --user flightadmin --size 128G --os alma"
 }
 
 error() {
@@ -74,6 +71,17 @@ while [[ $# -gt 0 ]]; do
 
     --name=*)
       NAME="${1#*=}"
+      shift
+      ;;
+
+    -u|--user)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      DEFAULT_USER="$2"
+      shift 2
+      ;;
+
+    --user=*)
+      DEFAULT_USER="${1#*=}"
       shift
       ;;
 
@@ -115,6 +123,8 @@ done
 # ---------------------------------------------------------------------------
 
 [[ -n "$NAME" ]] || error "VM name is required. Use --name NAME"
+
+[[ -n "$DEFAULT_USER" ]] || error "Default user is required. Use --user USER"
 
 [[ -n "$SIZE" ]] || error "Disk size is required. Use --size SIZE"
 
@@ -191,7 +201,7 @@ set -e
 
 echo "Generating config ISO"
 
-if [ -f /tmp/imageiso ]; then
+if [ -d /tmp/imageiso ]; then
   rm -rf /tmp/imageiso
 fi
 
