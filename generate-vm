@@ -312,7 +312,8 @@ virt-install \\
   --network "bridge=\${EXTERNALBRIDGE}" \\
   --console pty,target_type=serial \\
   --graphics vnc,listen=0.0.0.0,port=-1 \\
-  --noautoconsole EOF
+  --noautoconsole
+EOF
 
 chmod +x "$VM_SCRIPT"
 
