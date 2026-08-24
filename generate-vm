@@ -1,0 +1,323 @@
+#!/bin/bash
+
+set -e
+
+NAME=""
+SIZE=""
+OS=""
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+VMPATH="/opt/vm"
+EXTERNALBRIDGE="ext"
+
+# Change these to wherever your base images actually live.
+ALMA_RAWIMAGE="./images/alma.qcow2"
+ARCH_RAWIMAGE="./images/arch.qcow2"
+
+# Cloud-init settings
+ROOT_PASSWORD="0p3nflight"
+DEFAULT_USER="flightadmin"
+
+# Configuration file
+CONFIG_FILE="./vm.conf"
+
+# Public key - can be overridden by the config file
+SSH_PUBLIC_KEY=""
+
+# ---------------------------------------------------------------------------
+# Functions
+# ---------------------------------------------------------------------------
+
+usage() {
+  echo "Usage:"
+  echo "  $0 -n NAME -s SIZE --os OS"
+  echo
+  echo "Options:"
+  echo "  -n, --name NAME                  VM name"
+  echo "  -s, --size SIZE                  Disk size, e.g. 128G"
+  echo "      --os OS                      Operating system: alma or arch"
+  echo "      --operating-system OS        Same as --os"
+  echo "  -h, --help                       Show this help"
+  echo
+  echo "Example:"
+  echo "  $0 --name stevetest1 --size 128G --os alma"
+}
+
+error() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Parse config file
+# ---------------------------------------------------------------------------
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+# ---------------------------------------------------------------------------
+# Parse flags
+# ---------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--name)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      NAME="$2"
+      shift 2
+      ;;
+
+    --name=*)
+      NAME="${1#*=}"
+      shift
+      ;;
+
+    -s|--size)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      SIZE="$2"
+      shift 2
+      ;;
+
+    --size=*)
+      SIZE="${1#*=}"
+      shift
+      ;;
+
+    --os|--operating-system)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      OS="$2"
+      shift 2
+      ;;
+
+    --os=*|--operating-system=*)
+      OS="${1#*=}"
+      shift
+      ;;
+
+    -h|--help)
+      usage
+      exit 0
+      ;;
+
+    *)
+      error "Unknown option: $1"
+      ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Validate arguments
+# ---------------------------------------------------------------------------
+
+[[ -n "$NAME" ]] || error "VM name is required. Use --name NAME"
+
+[[ -n "$SIZE" ]] || error "Disk size is required. Use --size SIZE"
+
+[[ -n "$SSH_PUBLIC_KEY" ]] || error "SSH_PUBLIC_KEY is required in ${CONFIG_FILE}"
+
+OS=$(printf '%s' "$OS" | tr '[:upper:]' '[:lower:]')
+
+case "$OS" in
+  alma)
+    RAWIMAGE="$ALMA_RAWIMAGE"
+    OS_VARIANT="rhel9-unknown"
+    ;;
+
+  arch)
+    RAWIMAGE="$ARCH_RAWIMAGE"
+    OS_VARIANT="archlinux"
+    ;;
+
+  *)
+    error "Invalid operating system: $OS. Valid values are: alma or arch"
+    ;;
+esac
+
+# Basic name validation. This also prevents accidentally generating paths
+# containing / or other unexpected characters.
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid VM name: $NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+IMAGEISO="/tmp/imageiso"
+CONFIGISO="${IMAGEISO}/config.iso"
+
+VM_SCRIPT="${PWD}/${NAME}-create.sh"
+
+VM_DISK="${VMPATH}/${NAME}.qcow2"
+VM_CONFIG_ISO="${VMPATH}/${NAME}_config.iso"
+
+# ---------------------------------------------------------------------------
+# Check prerequisites
+# ---------------------------------------------------------------------------
+
+if ! command -v mkisofs >/dev/null 2>&1; then
+  error "mkisofs is not installed"
+fi
+
+if ! command -v qemu-img >/dev/null 2>&1; then
+  error "qemu-img is not installed"
+fi
+
+if ! command -v virt-install >/dev/null 2>&1; then
+  error "You need to install libvirt virt-install"
+fi
+
+if [[ ! -f "$RAWIMAGE" ]]; then
+  error "Raw image does not exist: $RAWIMAGE"
+fi
+
+# ---------------------------------------------------------------------------
+# Generate the config ISO script
+# ---------------------------------------------------------------------------
+
+CONFIG_SCRIPT="/tmp/${NAME}-generate-config-iso.sh"
+
+echo "Generating config ISO script: ${CONFIG_SCRIPT}"
+
+cat > "$CONFIG_SCRIPT" <<EOF
+#!/bin/bash
+
+set -e
+
+echo "Generating config ISO"
+
+if [ -f /tmp/imageiso ]; then
+  rm -rf /tmp/imageiso
+fi
+
+mkdir -p /tmp/imageiso
+
+META=/tmp/imageiso/meta-data
+USER=/tmp/imageiso/user-data
+ISO=/tmp/imageiso/config.iso
+
+cat <<'METAEOF' > \$META
+instance-id: iid-${NAME}
+dsmode: local
+local-hostname: ${NAME}
+hostname: ${NAME}
+fqdn: ${NAME}.dmz.alces-software.com
+network:
+  config: disabled
+public-keys:
+  - ${SSH_PUBLIC_KEY}
+METAEOF
+
+cat <<'NETWORKEOF' > /tmp/imageiso/network-interfaces
+config: disabled
+network:
+  config: disabled
+NETWORKEOF
+
+cat <<'NETWORKEOF' > /tmp/imageiso/network-config
+config: disabled
+network:
+  config: disabled
+NETWORKEOF
+
+cat <<'USEREOF' > \$USER
+#cloud-config
+disable_root: 0
+ssh_pwauth: 1
+
+chpasswd:
+  list: |
+     root:${ROOT_PASSWORD}
+
+system_info:
+  default_user:
+    name: ${DEFAULT_USER}
+    lock_passwd: true
+    gecos: Local Administrator
+    groups: [wheel, adm, systemd-journal]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+
+network:
+  config: disabled
+USEREOF
+
+mkisofs -o \$ISO -V cidata -J \$META \$USER
+
+echo "Created \$ISO"
+EOF
+
+chmod +x "$CONFIG_SCRIPT"
+
+# ---------------------------------------------------------------------------
+# Generate VM creation script
+# ---------------------------------------------------------------------------
+
+echo "Generating VM creation script: ${VM_SCRIPT}"
+
+cat > "$VM_SCRIPT" <<EOF
+#!/bin/bash
+
+set -e
+
+VMNAME="${NAME}"
+EXTERNALBRIDGE="${EXTERNALBRIDGE}"
+CONFIGISO="${CONFIGISO}"
+RAWIMAGE="${RAWIMAGE}"
+
+VMPATH="${VMPATH}"
+VM_DISK="\${VMPATH}/\${VMNAME}.qcow2"
+VM_CONFIG_ISO="\${VMPATH}/\${VMNAME}_config.iso"
+
+if ! [ -x /usr/bin/virt-install ]; then
+  echo "You need to install libvirt virt-install" >&2
+  exit 1
+fi
+
+if [ ! -d "\${VMPATH}" ]; then
+  mkdir -p "\${VMPATH}"
+fi
+
+if [ -f "\${VM_DISK}" ]; then
+  echo "A Disk/VM by the name of \${VMNAME} already seems to exist" >&2
+  exit 1
+fi
+
+if [ -f "\${VM_CONFIG_ISO}" ]; then
+  echo "A config by that name already exists" >&2
+  exit 1
+fi
+
+cp -v "\${RAWIMAGE}" "\${VM_DISK}"
+cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
+
+echo "Creating Disk.."
+qemu-img resize "\${VM_DISK}" "${SIZE}"
+
+virt-install \\
+  --name "\${VMNAME}" \\
+  --import \\
+  --ram 2048 \\
+  --disk "\${VM_DISK},device=disk,bus=virtio" \\
+  --disk "\${VM_CONFIG_ISO},device=cdrom,bus=scsi" \\
+  --vcpus 2 \\
+  --os-variant "${OS_VARIANT}" \\
+  --network "bridge=\${EXTERNALBRIDGE}" \\
+  --console pty,target_type=serial \\
+  --graphics vnc,listen=0.0.0.0,port=-1 \\
+  --noautoconsole
+EOF
+
+chmod +x "$VM_SCRIPT"
+
+echo
+echo "Config ISO created:"
+echo "  ${CONFIGISO}"
+echo
+echo "VM creation script generated:"
+echo "  ${VM_SCRIPT}"
