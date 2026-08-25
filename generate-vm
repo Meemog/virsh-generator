@@ -40,7 +40,7 @@ usage() {
   echo "  -h, --help                       Show this help"
   echo
   echo "Example:"
-  echo "  $0 --name stevetest1 --user flightadmin --size 128G --os alma"
+  echo "  $0 --name myvm --user dev --size 64G --os alma"
 }
 
 error() {

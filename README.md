@@ -2,4 +2,9 @@
 
 ## Setup
 
-Download the cloud image files for arch and alma linux and put them in ./images
+Download the ArchLinux and AlmaLinux cloud images, and put them in `./images/arch.qcow2` and `./images/alma.qcow2`
+
+## Usage
+
+Run:
+`./generate-vm --name myvm --user dev --size 64G --os alma`
